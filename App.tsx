@@ -188,10 +188,12 @@ export default function App() {
         recognition.lang = 'en-US';
 
         recognition.onresult = (event: any) => {
-          const currentTranscript = Array.from(event.results)
-            .map((result: any) => result[0].transcript)
-            .join('');
-          setTranscript(currentTranscript);
+          // Only display the latest speech segment (clearing previous phrases visually)
+          const lastResultIndex = event.results.length - 1;
+          if (lastResultIndex >= 0) {
+             const currentTranscript = event.results[lastResultIndex][0].transcript;
+             setTranscript(currentTranscript);
+          }
         };
 
         try {
