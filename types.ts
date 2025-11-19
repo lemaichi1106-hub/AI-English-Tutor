@@ -36,6 +36,7 @@ export interface ChatMessage {
 export interface ChatResponse {
   text: string;
   pronunciationFeedback?: string | null;
+  suggestions?: string[];
 }
 
 export interface AssessmentResult {

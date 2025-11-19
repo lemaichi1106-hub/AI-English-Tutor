@@ -312,6 +312,12 @@ export default function App() {
       };
 
       setChatHistory(prev => [...prev, newAiMsg]);
+      
+      // Update suggestions from AI response
+      if (result.suggestions) {
+        setSuggestions(result.suggestions);
+      }
+
       speakText(result.text);
     } catch (error) {
       console.error(error);

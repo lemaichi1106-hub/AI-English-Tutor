@@ -98,9 +98,7 @@ export const generateLessonContent = async (topic: string): Promise<LessonConten
 };
 
 /**
- * Generates a chat response. 
- * Note: Real-time pronunciation feedback has been removed to improve speed.
- * Audio is still processed so the model "hears" the user.
+ * Generates a chat response with suggestions for the user.
  */
 export const generateChatResponse = async (
   history: ChatMessage[],
@@ -112,7 +110,8 @@ export const generateChatResponse = async (
   Your goals:
   1. Keep the conversation flowing naturally with concise responses (1-3 sentences).
   2. Do not provide corrections or feedback during the conversation. Just reply to the content.
-  3. The user is a learner, so speak clearly but naturally.`;
+  3. The user is a learner, so speak clearly but naturally.
+  4. ALWAYS provide 3 short, simple, natural suggested responses for the user to say next.`;
 
   // Construct the history for the model
   const messages = history.map((msg, index) => {
@@ -142,8 +141,13 @@ export const generateChatResponse = async (
     type: Type.OBJECT,
     properties: {
       response: { type: Type.STRING },
+      suggestions: { 
+        type: Type.ARRAY, 
+        items: { type: Type.STRING },
+        description: "3 short suggested replies for the user"
+      }
     },
-    required: ['response'],
+    required: ['response', 'suggestions'],
   };
 
   try {
@@ -164,7 +168,8 @@ export const generateChatResponse = async (
     return {
       text: result.response,
       // Feedback is now deferred to the Assessment phase
-      pronunciationFeedback: null 
+      pronunciationFeedback: null,
+      suggestions: result.suggestions || []
     };
 
   } catch (error) {
