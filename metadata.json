@@ -1,0 +1,7 @@
+{
+  "name": "LinguaFlow - AI English Tutor",
+  "description": "An interactive English learning application focusing on communication skills, topic-based sentence generation, real-time conversational practice, and comprehensive AI assessment.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
