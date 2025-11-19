@@ -23,7 +23,10 @@ import {
   AlertCircle,
   BookOpen,
   Ear,
-  Sparkles
+  Sparkles,
+  X,
+  Keyboard,
+  Lightbulb
 } from 'lucide-react';
 
 // --- Constants ---
@@ -58,6 +61,13 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
+// --- Helper: Format Duration ---
+const formatDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
 // --- Main Component ---
 export default function App() {
   // --- State ---
@@ -68,14 +78,22 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [inputText, setInputText] = useState('');
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [assessment, setAssessment] = useState<AssessmentResult | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showHints, setShowHints] = useState(false);
+  
+  // New State for Input Mode & Transcript
+  const [inputMode, setInputMode] = useState<'text' | 'voice'>('text');
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [transcript, setTranscript] = useState('');
   
   // Refs
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   // --- Effects ---
 
@@ -84,36 +102,18 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
 
-  // Initialize Speech Recognition (for text preview only)
+  // Recording Timer
   useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true; // Keep listening while recording
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
-
-      recognitionRef.current.onresult = (event: any) => {
-        let finalTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            // We can handle interim results if we want a dynamic UI
-            setInputText(event.results[i][0].transcript);
-          }
-        }
-        if (finalTranscript) {
-          setInputText(finalTranscript);
-        }
-      };
-
-      recognitionRef.current.onerror = (event: any) => {
-        console.error("Speech recognition error", event.error);
-        // Don't stop isListening here, as we might still be recording audio
-      };
+    let interval: any;
+    if (isListening) {
+      interval = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      setRecordingDuration(0);
     }
-  }, []);
+    return () => clearInterval(interval);
+  }, [isListening]);
 
   // Cleanup stream on unmount
   useEffect(() => {
@@ -134,8 +134,10 @@ export default function App() {
       setLessonContent(content);
       setAppState(AppState.LESSON_PREVIEW);
     } catch (error) {
-      alert("Failed to generate lesson content. Please try again.");
+      console.error(error);
+      alert("Failed to generate lesson content. Please try again or check your internet connection.");
     } finally {
+      // Ensure loading state is ALWAYS turned off
       setIsLoading(false);
     }
   };
@@ -151,14 +153,20 @@ export default function App() {
     ]);
     setAppState(AppState.PRACTICE_CHAT);
     speakText(`Hi there! I'm ready to practice ${selectedTopic?.title}.`);
+    // Generate initial suggestions
+    setSuggestions(["Hi, I'm ready to start.", "What should I do?", "Can you help me?"]);
+    setShowHints(false);
   };
 
   const startRecording = async () => {
+    setAudioBlob(null); // Clear previous recording
+    setTranscript(''); // Clear transcript
+    setRecordingDuration(0);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       
-      // 1. Start MediaRecorder for Audio Analysis
+      // Start MediaRecorder for Audio Analysis
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -170,91 +178,121 @@ export default function App() {
       };
       
       mediaRecorder.start();
-      setIsListening(true);
-      setInputText(''); // Clear input for new speech
+      
+      // Start SpeechRecognition for Visual Feedback
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
 
-      // 2. Start SpeechRecognition for Live Text Preview (if available)
-      if (recognitionRef.current) {
+        recognition.onresult = (event: any) => {
+          const currentTranscript = Array.from(event.results)
+            .map((result: any) => result[0].transcript)
+            .join('');
+          setTranscript(currentTranscript);
+        };
+
         try {
-          recognitionRef.current.start();
+          recognition.start();
+          recognitionRef.current = recognition;
         } catch (e) {
-          // Ignore if already started or error
-          console.log("Speech recognition start failed, falling back to just recording", e);
+          console.warn("Speech recognition failed to start:", e);
         }
       }
+
+      setIsListening(true);
+      setInputText(''); // Clear input for new speech
 
     } catch (error) {
       console.error("Error accessing microphone:", error);
       alert("Could not access microphone. Please check permissions.");
+      // Fallback to text mode if mic fails
+      setInputMode('text');
+      throw error;
     }
   };
 
-  const stopRecording = async () => {
+  const stopRecording = async (): Promise<Blob | null> => {
     setIsListening(false);
 
     // Stop Speech Recognition
     if (recognitionRef.current) {
       recognitionRef.current.stop();
+      recognitionRef.current = null;
     }
 
     // Stop Media Recorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      
-      // Wait for data available
-      await new Promise<void>((resolve) => {
-        if (mediaRecorderRef.current) {
-          mediaRecorderRef.current.onstop = () => resolve();
-        } else {
-          resolve();
+    return new Promise((resolve) => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.onstop = () => {
+          const blob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current!.mimeType });
+          setAudioBlob(blob);
+          resolve(blob);
+        };
+        
+        mediaRecorderRef.current.stop();
+        
+        // Stop tracks
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
         }
-      });
-
-      const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current.mimeType }); // often 'audio/webm'
-      
-      // If we have text from recognition, send it. 
-      // Even if recognition failed, we can send audio to Gemini, but we need some placeholder text in UI.
-      const textToSend = inputText.trim() || "(Voice Message)";
-      handleSendMessage(textToSend, audioBlob);
-
-      // Stop tracks
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
+      } else {
+        resolve(null);
       }
+    });
+  };
+
+  const switchToVoiceMode = async () => {
+    setInputMode('voice');
+    try {
+      await startRecording();
+    } catch (e) {
+      // Error handling is done in startRecording
     }
   };
 
-  const toggleListening = () => {
+  const switchToTextMode = async () => {
     if (isListening) {
-      stopRecording();
-    } else {
-      startRecording();
+      await stopRecording();
     }
+    setAudioBlob(null); // Discard audio when switching back manually
+    setInputMode('text');
   };
 
-  const handleSendMessage = async (text: string = inputText, audioBlob?: Blob) => {
-    if (!text.trim()) return;
+  const handleSendMessage = async (manualBlob?: Blob, manualText?: string) => {
+    const blobToSend = manualBlob || audioBlob;
+    const textToSend = manualText || inputText;
+
+    if (!textToSend.trim() && !blobToSend) return;
+
+    // If no text was captured but we have audio, show a placeholder
+    const displayMessage = textToSend.trim() || (blobToSend ? "🎤 Voice Message" : "");
 
     const newUserMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      text: text,
+      text: displayMessage,
       timestamp: Date.now()
     };
 
     setChatHistory(prev => [...prev, newUserMsg]);
     setInputText('');
+    setAudioBlob(null); // Clear the sent audio
+    setSuggestions([]); // Clear suggestions
+    setShowHints(false); // Reset hints visibility
     setIsLoading(true);
-
+    
     try {
       // Prepare Audio Data if exists
       let audioData = undefined;
-      if (audioBlob) {
-        const base64 = await blobToBase64(audioBlob);
+      if (blobToSend) {
+        const base64 = await blobToBase64(blobToSend);
         audioData = {
           base64,
-          mimeType: audioBlob.type || 'audio/webm'
+          mimeType: blobToSend.type || 'audio/webm'
         };
       }
 
@@ -280,7 +318,26 @@ export default function App() {
     }
   };
 
+  const handleVoiceSend = async () => {
+    const blob = await stopRecording();
+    if (blob) {
+      // Pass the transcript as text if available, otherwise let gemini.ts use just audio
+      // For now, we still just display "Voice Message" or similar if we don't set inputText.
+      // But the user might want to see their transcript in chat history.
+      handleSendMessage(blob, transcript); 
+    }
+    setInputMode('text');
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    handleSendMessage(undefined, suggestion);
+  };
+
   const endPractice = async () => {
+    // Ensure we stop any active recording before ending
+    if (isListening) {
+      await stopRecording();
+    }
     setIsLoading(true);
     try {
       const result = await generateAssessment(chatHistory, selectedTopic?.title || 'General');
@@ -300,6 +357,11 @@ export default function App() {
     setChatHistory([]);
     setAssessment(null);
     setInputText('');
+    setAudioBlob(null);
+    setSuggestions([]);
+    setShowHints(false);
+    setInputMode('text');
+    setTranscript('');
   };
 
   // --- Renderers ---
@@ -357,12 +419,48 @@ export default function App() {
               </h3>
               <div className="grid gap-4">
                 {lessonContent.vocabulary.map((item, idx) => (
-                  <div key={idx} className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                    <div className="flex justify-between items-start mb-1">
-                      <span className="font-bold text-lg text-slate-900">{item.word}</span>
+                  <div key={idx} className="bg-slate-50 p-4 rounded-xl border border-slate-100 hover:border-indigo-100 transition-colors">
+                    <div className="flex justify-between items-start mb-2">
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-lg text-slate-900">{item.word}</span>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); speakText(item.word); }}
+                            className="text-slate-400 hover:text-indigo-600 transition-colors p-1 rounded-full hover:bg-indigo-50"
+                            title="Listen to word"
+                          >
+                            <Volume2 size={18} />
+                          </button>
+                        </div>
+                        {item.phonetic && item.phonetic.trim() !== '' && (
+                          <span className="text-slate-500 font-mono text-sm">/{item.phonetic}/</span>
+                        )}
+                      </div>
                       <span className="text-sm text-slate-500 bg-white px-2 py-1 rounded border shadow-sm">{item.translation}</span>
                     </div>
-                    <p className="text-slate-600 text-sm italic">"{item.context}"</p>
+                    
+                    {item.context && item.context.trim() !== '' && (
+                      <div className="flex items-center justify-between mb-3 gap-2">
+                        <p className="text-slate-600 text-sm italic">"{item.context}"</p>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); speakText(item.context); }}
+                          className="text-slate-400 hover:text-indigo-600 transition-colors p-1 rounded-full hover:bg-indigo-50 flex-shrink-0"
+                          title="Listen to example"
+                        >
+                          <Volume2 size={18} />
+                        </button>
+                      </div>
+                    )}
+                    
+                    {item.pronunciationTip && item.pronunciationTip.trim() !== '' && (
+                      <div className="flex items-start bg-amber-50 p-2 rounded-lg border border-amber-100">
+                        <Ear size={14} className="text-amber-600 mr-2 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-amber-800 font-medium">
+                          <span className="font-bold uppercase text-[10px] text-amber-600 mr-1">Tip:</span>
+                          {item.pronunciationTip}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -379,10 +477,26 @@ export default function App() {
               <div className="space-y-4">
                 {lessonContent.patterns.map((item, idx) => (
                   <div key={idx} className="bg-slate-50 p-4 rounded-xl border-l-4 border-emerald-400">
-                    <p className="font-bold text-slate-800 text-lg mb-1">{item.pattern}</p>
+                    <div className="flex justify-between items-start">
+                        <p className="font-bold text-slate-800 text-lg mb-1">{item.pattern}</p>
+                        <button 
+                            onClick={() => speakText(item.pattern)}
+                            className="text-slate-400 hover:text-emerald-600 transition-colors"
+                        >
+                            <Volume2 size={16} />
+                        </button>
+                    </div>
                     <p className="text-slate-500 text-sm mb-2">{item.translation}</p>
-                    <div className="bg-white p-3 rounded-lg text-slate-700 text-sm border border-slate-200">
-                      Example: {item.example}
+                    <div className="bg-white p-3 rounded-lg text-slate-700 text-sm border border-slate-200 mt-2">
+                      <div className="flex justify-between items-start">
+                          <span>Example: {item.example}</span>
+                          <button 
+                              onClick={() => speakText(item.example)}
+                              className="text-slate-300 hover:text-emerald-600 transition-colors ml-2"
+                          >
+                              <Volume2 size={14} />
+                          </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -450,17 +564,6 @@ export default function App() {
                   </button>
                 )}
               </div>
-
-              {/* Pronunciation Feedback Bubble */}
-              {msg.role === 'model' && msg.pronunciationFeedback && (
-                <div className="mt-2 max-w-[80%] md:max-w-[60%] bg-amber-50 border border-amber-100 rounded-xl p-3 flex items-start animate-pulse-ring">
-                  <Ear className="text-amber-500 flex-shrink-0 mt-0.5 mr-2" size={16} />
-                  <div>
-                    <span className="text-xs font-bold text-amber-600 uppercase block mb-1">Pronunciation Tip</span>
-                    <p className="text-sm text-amber-800 leading-snug">{msg.pronunciationFeedback}</p>
-                  </div>
-                </div>
-              )}
             </div>
           ))}
           {isLoading && (
@@ -477,41 +580,124 @@ export default function App() {
           <div ref={chatEndRef} />
         </div>
 
+        {/* Suggestions Area with Hint Toggle */}
+        {!isLoading && !isListening && suggestions.length > 0 && (
+          <div className="bg-slate-50 px-4 pb-2 flex justify-center min-h-[40px]">
+            {!showHints ? (
+              <button
+                onClick={() => setShowHints(true)}
+                className="flex items-center text-sm text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-full transition-colors border border-indigo-200 shadow-sm"
+              >
+                <Lightbulb size={14} className="mr-1.5" />
+                Hint
+              </button>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide justify-center animate-fade-in">
+                {suggestions.map((suggestion, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSuggestionClick(suggestion)}
+                    className="bg-white text-indigo-600 border border-indigo-200 px-4 py-2 rounded-full text-sm font-medium hover:bg-indigo-50 whitespace-nowrap shadow-sm transition-colors"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Input Area */}
         <div className="bg-white border-t border-slate-200 p-4">
-          <div className="max-w-4xl mx-auto flex items-center space-x-3">
-            <button
-              onClick={toggleListening}
-              className={`p-4 rounded-full transition-all duration-300 flex-shrink-0 ${
-                isListening 
-                  ? 'bg-red-50 text-red-500 animate-pulse-ring ring-2 ring-red-500' 
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {isListening ? <MicOff size={24} /> : <Mic size={24} />}
-            </button>
-            
-            <input 
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder={isListening ? "Listening... (Speak clearly)" : "Type your message..."}
-              className="flex-grow bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-              disabled={isLoading}
-            />
-            
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={!inputText.trim() || isLoading}
-              className="p-4 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-            >
-              <Send size={20} />
-            </button>
-          </div>
-          <div className="text-center mt-2 text-xs text-slate-400 flex items-center justify-center">
-            <Sparkles size={12} className="mr-1 text-amber-400" />
-            Use the microphone for instant pronunciation feedback
+          {/* Review Mode (if audio blob exists but not sent, usually from switching back from voice to text manually) */}
+          {audioBlob && inputMode === 'text' && (
+            <div className="max-w-4xl mx-auto mb-2 flex items-center">
+              <div className="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center shadow-sm border border-indigo-100">
+                <div className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></div>
+                Audio recorded
+                <button 
+                  onClick={() => setAudioBlob(null)}
+                  className="ml-3 p-0.5 hover:bg-indigo-200 rounded-full transition-colors text-indigo-400"
+                  title="Discard audio"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="max-w-4xl mx-auto">
+            {inputMode === 'text' ? (
+              // --- Text Input Mode ---
+              <div className="flex items-center space-x-3">
+                 <button
+                  onClick={switchToVoiceMode}
+                  disabled={isLoading}
+                  className="p-3 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors flex-shrink-0"
+                  title="Switch to Voice Mode"
+                >
+                  <Mic size={24} />
+                </button>
+                
+                <input 
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                  placeholder={audioBlob ? "Add text (optional)..." : "Type your message..."}
+                  className="flex-grow bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                  disabled={isLoading}
+                />
+                
+                <button
+                  onClick={() => handleSendMessage()}
+                  disabled={(!inputText.trim() && !audioBlob) || isLoading}
+                  className="p-4 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                >
+                  <Send size={20} />
+                </button>
+              </div>
+            ) : (
+              // --- Voice Input Mode ---
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={switchToTextMode}
+                  className="p-3 rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors flex-shrink-0"
+                  title="Switch to Text Mode"
+                >
+                  <Keyboard size={24} />
+                </button>
+
+                <div className="flex-grow relative bg-slate-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center overflow-hidden min-h-[50px]">
+                   {/* Background Pulse Effect (Subtle) */}
+                   <div className="absolute inset-0 bg-indigo-50 opacity-30 animate-pulse" />
+                   
+                   {/* Text Content */}
+                   <span className="relative z-10 text-slate-800 w-full truncate pr-16 font-medium">
+                      {transcript || "Listening..."}
+                   </span>
+                   
+                   {/* Timer Badge */}
+                   <div className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-red-100 text-red-600 px-2 py-1 rounded-lg text-xs font-bold flex items-center shadow-sm z-20">
+                      <div className="w-2 h-2 bg-red-500 rounded-full mr-1.5 animate-pulse"></div>
+                      {formatDuration(recordingDuration)}
+                   </div>
+                </div>
+
+                <button
+                  onClick={handleVoiceSend}
+                  disabled={recordingDuration < 3 || isLoading}
+                  className={`p-4 rounded-xl transition-all flex-shrink-0 ${
+                    recordingDuration >= 3 
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md' 
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                  title={recordingDuration < 3 ? "Record at least 3 seconds" : "Send Voice Message"}
+                >
+                  <Send size={20} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

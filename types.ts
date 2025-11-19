@@ -15,7 +15,13 @@ export interface Topic {
 
 export interface LessonContent {
   topic: string;
-  vocabulary: { word: string; translation: string; context: string }[];
+  vocabulary: { 
+    word: string; 
+    translation: string; 
+    context: string;
+    phonetic: string;
+    pronunciationTip: string;
+  }[];
   patterns: { pattern: string; example: string; translation: string }[];
 }
 

@@ -6,15 +6,44 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const MODEL_FAST = 'gemini-2.5-flash';
 
+// --- Helper to ensure JSON parsing is robust ---
+const cleanAndParseJSON = (text: string) => {
+  try {
+    // Remove Markdown code block syntax if present
+    let cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    // Handle cases where there might be text before or after the JSON object
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+    
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("JSON Parse Error:", e, "Original Text:", text);
+    throw new Error("Failed to parse AI response.");
+  }
+};
+
 /**
  * Generates lesson content (vocabulary and sentence patterns) for a given topic.
  */
 export const generateLessonContent = async (topic: string): Promise<LessonContent> => {
   const prompt = `Create an English learning lesson plan for the topic: "${topic}".
   Target audience: Vietnamese speakers learning English.
-  Include 5 key vocabulary words with Vietnamese translation and context usage.
-  Include 3 common sentence patterns relevant to the topic with examples and Vietnamese translations.
-  Return JSON only.`;
+  
+  Generate a strict JSON object containing:
+  1. 'topic': The topic title.
+  2. 'vocabulary': An array of 5 key words. For each item, you MUST provide non-empty values for:
+     - 'word': ONLY the English word (e.g., "Barista"). Do not include the translation here.
+     - 'translation': The Vietnamese meaning.
+     - 'context': A complete English sentence using the word.
+     - 'phonetic': IPA transcription (e.g. /bəˈrɪstə/).
+     - 'pronunciationTip': Specific advice for Vietnamese speakers in Vietnamese.
+  3. 'patterns': An array of 3 common sentence patterns with 'pattern', 'example', and 'translation'.
+
+  Ensure all fields are filled. Do not return empty strings or nulls.`;
 
   const schema: Schema = {
     type: Type.OBJECT,
@@ -28,7 +57,10 @@ export const generateLessonContent = async (topic: string): Promise<LessonConten
             word: { type: Type.STRING },
             translation: { type: Type.STRING },
             context: { type: Type.STRING },
+            phonetic: { type: Type.STRING },
+            pronunciationTip: { type: Type.STRING },
           },
+          required: ['word', 'translation', 'context', 'phonetic', 'pronunciationTip']
         },
       },
       patterns: {
@@ -58,7 +90,7 @@ export const generateLessonContent = async (topic: string): Promise<LessonConten
 
     const text = response.text;
     if (!text) throw new Error("No response from Gemini");
-    return JSON.parse(text) as LessonContent;
+    return cleanAndParseJSON(text) as LessonContent;
   } catch (error) {
     console.error("Error generating lesson:", error);
     throw error;
@@ -66,7 +98,9 @@ export const generateLessonContent = async (topic: string): Promise<LessonConten
 };
 
 /**
- * Generates a chat response acting as a conversational partner, optionally analyzing audio.
+ * Generates a chat response. 
+ * Note: Real-time pronunciation feedback has been removed to improve speed.
+ * Audio is still processed so the model "hears" the user.
  */
 export const generateChatResponse = async (
   history: ChatMessage[],
@@ -77,15 +111,10 @@ export const generateChatResponse = async (
   
   Your goals:
   1. Keep the conversation flowing naturally with concise responses (1-3 sentences).
-  2. IF audio is provided, analyze the user's pronunciation. 
-     - If pronunciation is good, set 'pronunciationFeedback' to null or a brief praise.
-     - If there are errors, set 'pronunciationFeedback' to a helpful tip explaining the mistake and how to fix it (in Vietnamese).
-  3. If no audio is provided, set 'pronunciationFeedback' to null.
-  
-  The user is a learner, so speak clearly but naturally.`;
+  2. Do not provide corrections or feedback during the conversation. Just reply to the content.
+  3. The user is a learner, so speak clearly but naturally.`;
 
   // Construct the history for the model
-  // We need to handle the last message specially if audio is provided
   const messages = history.map((msg, index) => {
     // If it's the last message (user's current turn) and we have audio data
     if (index === history.length - 1 && msg.role === 'user' && audioData) {
@@ -98,9 +127,8 @@ export const generateChatResponse = async (
               data: audioData.base64 
             } 
           },
-          // We can also include the text as a hint, or rely solely on audio. 
-          // Let's rely on audio for the most accurate pronunciation check, 
-          // but include text context if needed.
+          // We can also include the text as a hint if available
+          ...(msg.text ? [{ text: msg.text }] : [])
         ],
       };
     }
@@ -114,7 +142,6 @@ export const generateChatResponse = async (
     type: Type.OBJECT,
     properties: {
       response: { type: Type.STRING },
-      pronunciationFeedback: { type: Type.STRING, nullable: true },
     },
     required: ['response'],
   };
@@ -133,10 +160,11 @@ export const generateChatResponse = async (
     const text = response.text;
     if (!text) throw new Error("No response from Gemini");
     
-    const result = JSON.parse(text);
+    const result = cleanAndParseJSON(text);
     return {
       text: result.response,
-      pronunciationFeedback: result.pronunciationFeedback
+      // Feedback is now deferred to the Assessment phase
+      pronunciationFeedback: null 
     };
 
   } catch (error) {
@@ -147,6 +175,7 @@ export const generateChatResponse = async (
 
 /**
  * Analyzes the conversation history and provides assessment feedback.
+ * This now handles ALL feedback (grammar, pronunciation implied by transcription errors, etc).
  */
 export const generateAssessment = async (
   history: ChatMessage[],
@@ -165,7 +194,7 @@ export const generateAssessment = async (
   Provide an assessment for the Student (User) in JSON format including:
   1. Scores (0-100) for Grammar, Vocabulary (appropriate usage), and Fluency/Relevance.
   2. A short overall constructive comment (in Vietnamese).
-  3. A list of specific corrections. Identify grammatical errors or awkward phrasing from the Student's turns, show the correction, and explain why (explanation in Vietnamese).`;
+  3. A list of specific corrections. Identify grammatical errors, awkward phrasing, or likely pronunciation issues (based on phonetic misinterpretations) from the Student's turns. Show the correction, and explain why (explanation in Vietnamese).`;
 
   const schema: Schema = {
     type: Type.OBJECT,
@@ -207,7 +236,7 @@ export const generateAssessment = async (
 
     const text = response.text;
     if (!text) throw new Error("No assessment generated");
-    return JSON.parse(text) as AssessmentResult;
+    return cleanAndParseJSON(text) as AssessmentResult;
   } catch (error) {
     console.error("Assessment error:", error);
     // Fallback mock data in case of error
