@@ -1,6 +1,18 @@
 import React from 'react';
 import { Topic } from '../types';
-import { BookOpen, Coffee, Plane, Briefcase, ShoppingBag, Heart } from 'lucide-react';
+import { 
+  BookOpen, 
+  Coffee, 
+  Plane, 
+  Briefcase, 
+  ShoppingBag, 
+  Heart, 
+  Utensils, 
+  Stethoscope, 
+  MapPin, 
+  Monitor, 
+  Film 
+} from 'lucide-react';
 
 interface TopicCardProps {
   topic: Topic;
@@ -13,6 +25,11 @@ const iconMap: Record<string, React.ElementType> = {
   'work': Briefcase,
   'shopping': ShoppingBag,
   'dating': Heart,
+  'food': Utensils,
+  'health': Stethoscope,
+  'directions': MapPin,
+  'tech': Monitor,
+  'movies': Film,
   'general': BookOpen,
 };
 

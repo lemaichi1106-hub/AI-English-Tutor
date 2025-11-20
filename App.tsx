@@ -26,7 +26,8 @@ import {
   Sparkles,
   X,
   Keyboard,
-  Lightbulb
+  Lightbulb,
+  Plus
 } from 'lucide-react';
 
 // --- Constants ---
@@ -35,6 +36,11 @@ const INITIAL_TOPICS: Topic[] = [
   { id: '2', title: 'Airport Check-in', description: 'Handling luggage, tickets, and security checks.', icon: 'travel', difficulty: 'Intermediate' },
   { id: '3', title: 'Job Interview', description: 'Answering common questions about yourself and experience.', icon: 'work', difficulty: 'Advanced' },
   { id: '4', title: 'Shopping for Clothes', description: 'Asking for sizes, colors, and trying things on.', icon: 'shopping', difficulty: 'Beginner' },
+  { id: '5', title: 'Dinner Reservation', description: 'Booking a table and asking about menu recommendations.', icon: 'food', difficulty: 'Intermediate' },
+  { id: '6', title: 'Seeing a Doctor', description: 'Describing symptoms and scheduling a medical appointment.', icon: 'health', difficulty: 'Intermediate' },
+  { id: '7', title: 'Asking Directions', description: 'Finding your way around a new city using landmarks.', icon: 'directions', difficulty: 'Beginner' },
+  { id: '8', title: 'Tech Support', description: 'Explaining technical issues and following troubleshooting steps.', icon: 'tech', difficulty: 'Advanced' },
+  { id: '9', title: 'Discussing Movies', description: 'Talking about plots, actors, and expressing opinions.', icon: 'movies', difficulty: 'Advanced' },
 ];
 
 // --- Helper: Text to Speech ---
@@ -82,6 +88,7 @@ export default function App() {
   const [assessment, setAssessment] = useState<AssessmentResult | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showHints, setShowHints] = useState(false);
+  const [customTopicInput, setCustomTopicInput] = useState('');
   
   // New State for Input Mode & Transcript
   const [inputMode, setInputMode] = useState<'text' | 'voice'>('text');
@@ -140,6 +147,20 @@ export default function App() {
       // Ensure loading state is ALWAYS turned off
       setIsLoading(false);
     }
+  };
+
+  const handleCustomTopicSubmit = () => {
+    if (!customTopicInput.trim()) return;
+    
+    const newTopic: Topic = {
+      id: `custom-${Date.now()}`,
+      title: customTopicInput,
+      description: 'Custom learning session created by you.',
+      icon: 'general',
+      difficulty: 'Intermediate' // Default to intermediate for custom topics
+    };
+    
+    handleTopicSelect(newTopic);
   };
 
   const startPractice = () => {
@@ -370,6 +391,7 @@ export default function App() {
     setShowHints(false);
     setInputMode('text');
     setTranscript('');
+    setCustomTopicInput('');
   };
 
   // --- Renderers ---
@@ -384,7 +406,7 @@ export default function App() {
             </h1>
             <p className="text-lg text-slate-600 max-w-2xl mx-auto">
               Master English conversation through AI-powered roleplay. 
-              Select a topic, learn the patterns, and start speaking.
+              Select a topic or create your own to start speaking.
             </p>
           </header>
 
@@ -394,10 +416,42 @@ export default function App() {
               <p className="text-slate-500">Generating your personalized lesson...</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {INITIAL_TOPICS.map(topic => (
-                <TopicCard key={topic.id} topic={topic} onSelect={handleTopicSelect} />
-              ))}
+            <div className="space-y-8">
+              {/* Manual Topic Input */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-100">
+                <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center">
+                  <Sparkles className="text-indigo-500 mr-2" size={20} />
+                  Create Custom Topic
+                </h2>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <input
+                    type="text"
+                    value={customTopicInput}
+                    onChange={(e) => setCustomTopicInput(e.target.value)}
+                    placeholder="e.g., Discussing Artificial Intelligence, negotiating a salary..."
+                    className="flex-grow bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                    onKeyDown={(e) => e.key === 'Enter' && handleCustomTopicSubmit()}
+                  />
+                  <button
+                    onClick={handleCustomTopicSubmit}
+                    disabled={!customTopicInput.trim() || isLoading}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[160px]"
+                  >
+                    <Plus size={20} className="mr-2" />
+                    Create
+                  </button>
+                </div>
+              </div>
+
+              {/* Topic Grid */}
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 mb-4">Suggested Topics</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {INITIAL_TOPICS.map(topic => (
+                    <TopicCard key={topic.id} topic={topic} onSelect={handleTopicSelect} />
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
